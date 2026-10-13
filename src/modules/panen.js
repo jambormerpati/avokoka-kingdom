@@ -73,25 +73,50 @@ export async function panenForm(env, data = {}, edit = false) {
         ${field("Komoditas", "komoditas", data.komoditas || "", "text")}
         ${field("Varietas", "varietas", data.varietas || "", "text")}
         ${field("Jumlah Buah", "jumlah_buah", data.jumlah_buah ?? "", "number")}
-        <!-- Perubahan di sini: tambahkan step="any" agar bisa menginput nilai desimal -->
+        
         <div class="form-group">
           <label>Berat (kg)</label>
-          <input class="form-control" type="number" step="any" name="berat_kg" value="${esc(data.berat_kg ?? "")}">
+          <input class="form-control" type="number" step="any" id="berat_kg" name="berat_kg" value="${esc(data.berat_kg ?? "")}">
         </div>
+        
         ${field("Kualitas", "kualitas", data.kualitas || "", "text")}
+        
         <div class="form-group">
-          <label>Harga per kg</label>
-          <input class="form-control" type="number" step="any" name="harga_per_kg" value="${esc(data.harga_per_kg ?? "")}">
+          <label>Harga per kg (Rp)</label>
+          <input class="form-control" type="number" step="any" id="harga_per_kg" name="harga_per_kg" value="${esc(data.harga_per_kg ?? "")}">
         </div>
+        
         <div class="form-group">
-          <label>Nilai Total</label>
-          <input class="form-control" type="number" step="any" name="nilai_total" value="${esc(data.nilai_total ?? "")}">
+          <label>Nilai Total (Rp)</label>
+          <input class="form-control" type="number" step="any" id="nilai_total" name="nilai_total" value="${esc(data.nilai_total ?? "")}">
         </div>
+        
         ${field("Pembeli", "pembeli", data.pembeli || "", "text")}
         ${textareaField("Keterangan", "keterangan", data.keterangan || "", true)}
         ${formButtons("/panen")}
       </form>
     </div>
+
+    <script>
+      (function() {
+        const inputBerat = document.getElementById("berat_kg");
+        const inputHarga = document.getElementById("harga_per_kg");
+        const inputTotal = document.getElementById("nilai_total");
+
+        function hitungTotal() {
+          const berat = parseFloat(inputBerat.value) || 0;
+          const harga = parseFloat(inputHarga.value) || 0;
+          if (berat > 0 && harga > 0) {
+            inputTotal.value = Math.round(berat * harga);
+          }
+        }
+
+        if (inputBerat && inputHarga && inputTotal) {
+          inputBerat.addEventListener("input", hitungTotal);
+          inputHarga.addEventListener("input", hitungTotal);
+        }
+      })();
+    </script>
   `;
 
   return layout(edit ? "Edit Panen" : "Tambah Panen", content, "panen");
