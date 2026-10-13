@@ -528,25 +528,37 @@ export async function pengamatanUpdate(request, env, pohonSampelId, pengamatanId
   return Response.redirect(new URL(`/pohon-sampel/${encodeURIComponent(pohonSampelId)}`, request.url), 303);
 }
 
-export async function fotoPohonSampelForm(env, pohonSampelId, data = {}){
+export async function fotoPohonSampelForm(env, data = {}) {
   const sampel = await env.DB.prepare(`
     SELECT ps.id, ps.kode_sampel, p.kode_pohon, p.komoditas, p.varietas, pl.kode_plot, b.kode_blok
     FROM pohon_sampel ps JOIN pohon p ON p.id = ps.pohon_id JOIN plot pl ON pl.id = ps.plot_id LEFT JOIN blok b ON b.id = pl.blok_id
     WHERE ps.id = ? LIMIT 1
-  `).bind(pohonSampelId).first();
+  `).bind(data.pohon_sampel_id || data.id).first();
 
   if(!sampel) return layout("Pohon Sampel Tidak Ditemukan", `<div class="card"><h2>Pohon sampel tidak ditemukan.</h2></div>`, "pohon-sampel", "admin");
 
+  const cloudName = env.CLOUDINARY_CLOUD_NAME || "ttkppmx4";
+  const uploadPreset = env.CLOUDINARY_UPLOAD_PRESET || "avokoka_upload";
+
   const content = `
-    <div class="page-title"><div><h1>📷 Tambah Foto</h1></div></div>
+    <div class="page-title"><div><h1>📷 Tambah Foto Pohon Sampel</h1></div></div>
     <div class="card">
-      <form id="fotoForm" action="/pohon-sampel/${encodeURIComponent(pohonSampelId)}/foto/new" method="POST">
+      <div style="margin-bottom:20px; padding:15px; border-radius:8px; background:rgba(0,0,0,.04);">
+        <strong>${esc(sampel.kode_sampel)}</strong> — Pohon <strong>${esc(sampel.kode_pohon)}</strong>
+      </div>
+
+      <form id="fotoForm" action="/pohon-sampel/${encodeURIComponent(sampel.id)}/foto/new" method="POST">
+        <!-- Hidden inputs untuk menampung URL dari Cloudinary -->
+        <input type="hidden" name="url_foto" id="url_foto" value="">
+        <input type="hidden" name="cloudinary_public_id" id="cloudinary_public_id" value="">
+
         <div class="form-grid">
           ${field("Tanggal Foto", "tanggal_foto", data.tanggal_foto || new Date().toISOString().slice(0,10), "date", false, true)}
-          <div>
-            <label>Jenis Foto</label>
-            <select name="jenis_foto" required>
-              <option value="">Pilih jenis foto</option>
+          
+          <div class="form-group">
+            <label>Jenis Foto *</label>
+            <select class="form-control" name="jenis_foto" required>
+              <option value="">-- Pilih Jenis Foto --</option>
               <option value="Tanaman">Tanaman</option>
               <option value="Daun">Daun</option>
               <option value="Bunga">Bunga</option>
@@ -556,26 +568,97 @@ export async function fotoPohonSampelForm(env, pohonSampelId, data = {}){
               <option value="Lainnya">Lainnya</option>
             </select>
           </div>
-          <div>
-            <label>Pilih Foto</label>
-            <input type="file" name="foto" id="foto" accept="image/*" required>
+
+          <div class="form-group">
+            <label>Pilih File Foto *</label>
+            <input class="form-control" type="file" id="fotoFile" accept="image/*" required>
           </div>
-          ${textareaField("Keterangan", "keterangan", data.keterangan || "", false)}
+
+          ${textareaField("Keterangan", "keterangan", data.keterangan || "", true)}
         </div>
-        <div id="preview" style="margin-top:20px;margin-bottom:20px;"></div>
+
+        <div id="preview" style="margin-top:15px; margin-bottom:15px;"></div>
+        <div id="uploadStatus" style="margin-bottom:15px; font-weight:bold;"></div>
+
         <div class="actions">
-          <a href="/pohon-sampel/${encodeURIComponent(pohonSampelId)}" class="btn btn-secondary">← Batal</a>
+          <a href="/pohon-sampel/${encodeURIComponent(sampel.id)}" class="btn btn-secondary">← Batal</a>
           <button type="submit" class="btn btn-primary" id="uploadButton">☁️ Upload & Simpan</button>
         </div>
-        <div id="uploadStatus" style="margin-top:15px;"></div>
       </form>
     </div>
+
+    <script>
+      (function() {
+        const form = document.getElementById("fotoForm");
+        const fileInput = document.getElementById("fotoFile");
+        const urlInput = document.getElementById("url_foto");
+        const publicIdInput = document.getElementById("cloudinary_public_id");
+        const btn = document.getElementById("uploadButton");
+        const status = document.getElementById("uploadStatus");
+        const preview = document.getElementById("preview");
+
+        fileInput.addEventListener("change", function() {
+          const file = fileInput.files[0];
+          if(file) {
+            preview.innerHTML = '<img src="' + URL.createObjectURL(file) + '" style="max-width:200px; max-height:200px; border-radius:8px; border:1px solid #ccc;">';
+          }
+        });
+
+        form.addEventListener("submit", async function(e) {
+          // Jika URL foto sudah terisi, biarkan form terkirim biasa
+          if (urlInput.value) return;
+
+          e.preventDefault();
+          const file = fileInput.files[0];
+          if(!file) {
+            alert("Pilih file foto terlebih dahulu.");
+            return;
+          }
+
+          btn.disabled = true;
+          btn.textContent = "⏳ Mengunggah ke Cloudinary...";
+          status.style.color = "#176b3a";
+          status.textContent = "⏳ Sedang mengunggah foto ke Cloudinary...";
+
+          try {
+            const formData = new FormData();
+            formData.append("file", file);
+            formData.append("upload_preset", "${uploadPreset}");
+
+            const response = await fetch("https://api.cloudinary.com/v1_1/${cloudName}/image/upload", {
+              method: "POST",
+              body: formData
+            });
+
+            const result = await response.json();
+
+            if(!response.ok) {
+              throw new Error(result.error ? result.error.message : "Gagal unggah foto");
+            }
+
+            // Isikan URL hasil upload ke hidden input
+            urlInput.value = result.secure_url;
+            publicIdInput.value = result.public_id || "";
+
+            status.textContent = "✅ Foto berhasil diunggah! Menyimpan data...";
+            
+            // Kirim form setelah URL terisi
+            form.submit();
+          } catch(err) {
+            btn.disabled = false;
+            btn.textContent = "☁️ Upload & Simpan";
+            status.style.color = "#b42318";
+            status.textContent = "❌ Gagal unggah foto: " + err.message;
+          }
+        });
+      })();
+    </script>
   `;
 
   return layout("Tambah Foto", content, "pohon-sampel", "admin");
 }
 
-export async function fotoPohonSampelCreate(request, env, pohonSampelId){
+export async function fotoPohonSampelCreate(request, env, pohonSampelId) {
   const form = await request.formData();
   const tanggalFoto = String(form.get("tanggal_foto") || "").trim();
   const jenisFoto = String(form.get("jenis_foto") || "").trim();
@@ -583,7 +666,9 @@ export async function fotoPohonSampelCreate(request, env, pohonSampelId){
   const cloudinaryPublicId = String(form.get("cloudinary_public_id") || "").trim();
   const keterangan = String(form.get("keterangan") || "").trim();
 
-  if(!tanggalFoto || !jenisFoto || !urlFoto) return new Response("Data foto belum lengkap.", { status: 400 });
+  if(!tanggalFoto || !jenisFoto || !urlFoto) {
+    return new Response("Data foto belum lengkap. Pastikan URL foto berhasil terisi.", { status: 400 });
+  }
 
   const fotoId = crypto.randomUUID();
   await env.DB.prepare(`
@@ -591,7 +676,7 @@ export async function fotoPohonSampelCreate(request, env, pohonSampelId){
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).bind(fotoId, pohonSampelId, tanggalFoto, jenisFoto, urlFoto, cloudinaryPublicId || null, keterangan || null).run();
 
-  return new Response(null, { status: 303, headers: { Location: `/pohon-sampel/${encodeURIComponent(pohonSampelId)}` } });
+  return Response.redirect(new URL(`/pohon-sampel/${encodeURIComponent(pohonSampelId)}`, request.url), 303);
 }
 
 export async function fotoPohonSampelEditForm(env, pohonSampelId, fotoId){
