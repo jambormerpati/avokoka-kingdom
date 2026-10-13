@@ -208,8 +208,9 @@ export default {
       return panenRisetDelete(env, decodeURIComponent(parts[2]), decodeURIComponent(parts[4]));
     }
 
-    if (path.match(/^\/pohon-sampel\/[^/]+\/foto\/new$/) && method === "GET") return html(await fotoPohonSampelForm(env, decodeURIComponent(path.split("/")[2])));
-    if (path.match(/^\/pohon-sampel\/[^/]+\/foto\/new$/) && method === "POST") return fotoPohonSampelCreate(request, env, decodeURIComponent(path.split("/")[2]));
+    if (path.match(/^\/pohon-sampel\/[^/]+\/foto\/new$/) && method === "GET") {
+  return html(await fotoPohonSampelForm(env, decodeURIComponent(path.split("/")[2])));
+}    if (path.match(/^\/pohon-sampel\/[^/]+\/foto\/new$/) && method === "POST") return fotoPohonSampelCreate(request, env, decodeURIComponent(path.split("/")[2]));
     if (path.match(/^\/pohon-sampel\/[^/]+\/foto\/[^/]+\/edit$/) && method === "GET") {
       const parts = path.split("/");
       return html(await fotoPohonSampelEditForm(env, decodeURIComponent(parts[2]), decodeURIComponent(parts[4])));
