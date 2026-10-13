@@ -780,23 +780,42 @@ export async function fotoPohonSampelUpdate(request, env, pohonSampelId, fotoId)
   return new Response(null, { status: 303, headers: { Location: `/pohon-sampel/${encodeURIComponent(pohonSampelId)}` } });
 }
 
-export async function cloudinaryDeleteImage(env, publicId){
-  if(!publicId) return { ok: true, skipped: true };
+export async function cloudinaryDeleteImage(env, publicId) {
+  if (!publicId || !env.CLOUDINARY_API_KEY || !env.CLOUDINARY_API_SECRET) {
+    console.log("Cloudinary credentials atau public_id tidak ditemukan, skip penghapusan.");
+    return { ok: false, message: "Credentials missing" };
+  }
+
+  const cloudName = env.CLOUDINARY_CLOUD_NAME || "ttkppmx4";
   const timestamp = Math.floor(Date.now() / 1000);
-  const signatureBase = `invalidate=true&public_id=${publicId}&timestamp=${timestamp}` + env.CLOUDINARY_API_SECRET;
+  
+  // String dasar untuk membuat signature SHA-1
+  const signatureBase = `invalidate=true&public_id=${publicId}&timestamp=${timestamp}${env.CLOUDINARY_API_SECRET}`;
+  
+  // Buat signature SHA-1 menggunakan Web Crypto API
   const hashBuffer = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(signatureBase));
-  const signature = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2,"0")).join("");
+  const signature = Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("");
 
-  const form = new FormData();
-  form.append("public_id", publicId);
-  form.append("timestamp", String(timestamp));
-  form.append("api_key", env.CLOUDINARY_API_KEY);
-  form.append("signature", signature);
-  form.append("invalidate", "true");
+  const formData = new FormData();
+  formData.append("public_id", publicId);
+  formData.append("timestamp", String(timestamp));
+  formData.append("api_key", env.CLOUDINARY_API_KEY);
+  formData.append("signature", signature);
+  formData.append("invalidate", "true");
 
-  const response = await fetch("https://api.cloudinary.com/v1_1/ttkppmx4/image/destroy", { method: "POST", body: form });
-  const result = await response.json();
-  return { ok: response.ok, result };
+  try {
+    const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/destroy`, {
+      method: "POST",
+      body: formData
+    });
+    const result = await response.json();
+    return { ok: response.ok, result };
+  } catch (err) {
+    console.error("Gagal menghapus gambar di Cloudinary:", err);
+    return { ok: false, error: err.message };
+  }
 }
 
 export async function fotoPohonSampelDelete(request, env, pohonSampelId, fotoId){
