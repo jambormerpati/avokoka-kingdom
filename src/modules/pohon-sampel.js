@@ -529,7 +529,6 @@ export async function pengamatanUpdate(request, env, pohonSampelId, pengamatanId
 }
 
 export async function fotoPohonSampelForm(env, pohonSampelId, data = {}) {
-  // Ambil ID dengan aman dari parameter
   const targetId = pohonSampelId || data.pohon_sampel_id || data.id;
 
   const sampel = await env.DB.prepare(`
@@ -543,7 +542,6 @@ export async function fotoPohonSampelForm(env, pohonSampelId, data = {}) {
 
   if(!sampel) return layout("Pohon Sampel Tidak Ditemukan", `<div class="card"><h2>Pohon sampel tidak ditemukan.</h2><a href="/pohon-sampel" class="btn btn-secondary">← Kembali</a></div>`, "pohon-sampel", "admin");
 
-  // Nilai fallback yang aman dari variabel environment
   const cloudName = (env && env.CLOUDINARY_CLOUD_NAME) ? env.CLOUDINARY_CLOUD_NAME : "ttkppmx4";
   const uploadPreset = (env && env.CLOUDINARY_UPLOAD_PRESET) ? env.CLOUDINARY_UPLOAD_PRESET : "avokoka_upload";
 
@@ -603,6 +601,53 @@ export async function fotoPohonSampelForm(env, pohonSampelId, data = {}) {
         const status = document.getElementById("uploadStatus");
         const preview = document.getElementById("preview");
 
+        // Fungsi mengompres file gambar menggunakan Canvas
+        function kompresGambar(file, maxDimension, quality) {
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = function(e) {
+              const img = new Image();
+              img.src = e.target.result;
+              img.onload = function() {
+                let width = img.width;
+                let height = img.height;
+
+                // Hitung aspek rasio agar resolusi maksimal disesuaikan
+                if (width > height) {
+                  if (width > maxDimension) {
+                    height = Math.round((height * maxDimension) / width);
+                    width = maxDimension;
+                  }
+                } else {
+                  if (height > maxDimension) {
+                    width = Math.round((width * maxDimension) / height);
+                    height = maxDimension;
+                  }
+                }
+
+                const canvas = document.createElement("canvas");
+                canvas.width = width;
+                canvas.height = height;
+
+                const ctx = canvas.getContext("2d");
+                ctx.drawImage(img, 0, 0, width, height);
+
+                // Export ke Blob format JPEG
+                canvas.toBlob((blob) => {
+                  if (blob) {
+                    resolve(blob);
+                  } else {
+                    reject(new Error("Gagal mengompres gambar"));
+                  }
+                }, "image/jpeg", quality);
+              };
+              img.onerror = (err) => reject(err);
+            };
+            reader.onerror = (err) => reject(err);
+          });
+        }
+
         fileInput.addEventListener("change", function() {
           const file = fileInput.files[0];
           if(file) {
@@ -621,13 +666,19 @@ export async function fotoPohonSampelForm(env, pohonSampelId, data = {}) {
           }
 
           btn.disabled = true;
-          btn.textContent = "⏳ Mengunggah ke Cloudinary...";
+          btn.textContent = "⏳ Memproses foto...";
           status.style.color = "#176b3a";
-          status.textContent = "⏳ Sedang mengunggah foto ke Cloudinary...";
+          status.textContent = "⏳ Mengompres file foto agar lebih ringan...";
 
           try {
+            // Kompres foto: Lebar/tinggi maks 1200px, kualitas JPEG 75%
+            const compressedBlob = await kompresGambar(file, 1200, 0.75);
+
+            status.textContent = "⏳ Upload foto ringan ke Cloudinary...";
+
             const formData = new FormData();
-            formData.append("file", file);
+            // Kirim file yang sudah dikompresi
+            formData.append("file", compressedBlob, "foto_sampel.jpg");
             formData.append("upload_preset", "${uploadPreset}");
 
             const response = await fetch("https://api.cloudinary.com/v1_1/${cloudName}/image/upload", {
