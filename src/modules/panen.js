@@ -73,10 +73,20 @@ export async function panenForm(env, data = {}, edit = false) {
         ${field("Komoditas", "komoditas", data.komoditas || "", "text")}
         ${field("Varietas", "varietas", data.varietas || "", "text")}
         ${field("Jumlah Buah", "jumlah_buah", data.jumlah_buah ?? "", "number")}
-        ${field("Berat (kg)", "berat_kg", data.berat_kg ?? "", "number")}
+        <!-- Perubahan di sini: tambahkan step="any" agar bisa menginput nilai desimal -->
+        <div class="form-group">
+          <label>Berat (kg)</label>
+          <input class="form-control" type="number" step="any" name="berat_kg" value="${esc(data.berat_kg ?? "")}">
+        </div>
         ${field("Kualitas", "kualitas", data.kualitas || "", "text")}
-        ${field("Harga per kg", "harga_per_kg", data.harga_per_kg ?? "", "number")}
-        ${field("Nilai Total", "nilai_total", data.nilai_total ?? "", "number")}
+        <div class="form-group">
+          <label>Harga per kg</label>
+          <input class="form-control" type="number" step="any" name="harga_per_kg" value="${esc(data.harga_per_kg ?? "")}">
+        </div>
+        <div class="form-group">
+          <label>Nilai Total</label>
+          <input class="form-control" type="number" step="any" name="nilai_total" value="${esc(data.nilai_total ?? "")}">
+        </div>
         ${field("Pembeli", "pembeli", data.pembeli || "", "text")}
         ${textareaField("Keterangan", "keterangan", data.keterangan || "", true)}
         ${formButtons("/panen")}
