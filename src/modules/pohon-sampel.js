@@ -780,19 +780,51 @@ export async function fotoPohonSampelUpdate(request, env, pohonSampelId, fotoId)
   return new Response(null, { status: 303, headers: { Location: `/pohon-sampel/${encodeURIComponent(pohonSampelId)}` } });
 }
 
-export async function cloudinaryDeleteImage(env, publicId) {
+// Fungsi ekstraksi public_id otomatis jika yang tersimpan berupa URL lengkap
+function extractPublicId(urlOrId) {
+  if (!urlOrId) return null;
+  
+  // Jika bukan URL, berarti sudah public_id murni
+  if (!urlOrId.startsWith("http://") && !urlOrId.startsWith("https://")) {
+    return urlOrId;
+  }
+
+  try {
+    // Contoh URL Cloudinary: https://res.cloudinary.com/demo/image/upload/v12345678/folder/foto1.jpg
+    const parts = urlOrId.split("/upload/");
+    if (parts.length < 2) return null;
+
+    let path = parts[1];
+    // Hapus bagian versi (contoh: v12345678/)
+    path = path.replace(/^v\d+\//, "");
+
+    // Hapus ekstensi file (.jpg, .png, .jpeg, dll)
+    const lastDot = path.lastIndexOf(".");
+    if (lastDot !== -1) {
+      path = path.substring(0, lastDot);
+    }
+
+    return path; // Menghasilkan: "folder/foto1" atau "foto1"
+  } catch (e) {
+    return null;
+  }
+}
+
+export async function cloudinaryDeleteImage(env, rawPublicIdOrUrl) {
+  const publicId = extractPublicId(rawPublicIdOrUrl);
+
   if (!publicId || !env.CLOUDINARY_API_KEY || !env.CLOUDINARY_API_SECRET) {
-    console.log("Cloudinary credentials atau public_id tidak ditemukan, skip penghapusan.");
-    return { ok: false, message: "Credentials missing" };
+    console.log("Credentials Cloudinary tidak lengkap atau public_id tidak valid.");
+    return { ok: false, message: "Missing credentials or public_id" };
   }
 
   const cloudName = env.CLOUDINARY_CLOUD_NAME || "ttkppmx4";
   const timestamp = Math.floor(Date.now() / 1000);
-  
-  // String dasar untuk membuat signature SHA-1
+
+  // Parameter penyusun signature SHA-1
   const signatureBase = `invalidate=true&public_id=${publicId}&timestamp=${timestamp}${env.CLOUDINARY_API_SECRET}`;
-  
-  // Buat signature SHA-1 menggunakan Web Crypto API
+
+  // Pembuatan signature digital SHA-1
   const hashBuffer = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(signatureBase));
   const signature = Array.from(new Uint8Array(hashBuffer))
     .map(b => b.toString(16).padStart(2, "0"))
@@ -816,6 +848,34 @@ export async function cloudinaryDeleteImage(env, publicId) {
     console.error("Gagal menghapus gambar di Cloudinary:", err);
     return { ok: false, error: err.message };
   }
+}
+
+export async function fotoPohonSampelDelete(request, env, pohonSampelId, fotoId) {
+  // Query dengan konversi string yang presisi
+  const foto = await env.DB.prepare(`
+    SELECT id, url_foto, cloudinary_public_id 
+    FROM foto_pohon_sampel 
+    WHERE id = ? AND pohon_sampel_id = ? 
+    LIMIT 1
+  `).bind(String(fotoId), String(pohonSampelId)).first();
+
+  if (!foto) {
+    return new Response("Foto tidak ditemukan.", { status: 404 });
+  }
+
+  // Prioritaskan kolom cloudinary_public_id, jika kosong fallback mengekstrak dari url_foto
+  const targetPublicId = foto.cloudinary_public_id || foto.url_foto;
+
+  if (targetPublicId) {
+    await cloudinaryDeleteImage(env, targetPublicId);
+  }
+
+  // Hapus baris di D1 Database
+  await env.DB.prepare(`DELETE FROM foto_pohon_sampel WHERE id = ? AND pohon_sampel_id = ?`)
+    .bind(String(fotoId), String(pohonSampelId))
+    .run();
+
+  return Response.redirect(new URL(`/pohon-sampel/${encodeURIComponent(pohonSampelId)}`, request.url), 303);
 }
 
 export async function fotoPohonSampelDelete(request, env, pohonSampelId, fotoId){
