@@ -27,7 +27,6 @@ export async function cloudinaryDeleteImage(env, rawPublicIdOrUrl) {
     const timestamp = Math.floor(Date.now() / 1000);
     const signatureBase = `invalidate=true&public_id=${publicId}&timestamp=${timestamp}${env.CLOUDINARY_API_SECRET}`;
 
-    // Generate SHA-1 Signature
     const msgUint8 = new TextEncoder().encode(signatureBase);
     const hashBuffer = await crypto.subtle.digest("SHA-1", msgUint8);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
@@ -594,8 +593,89 @@ export async function fotoPohonSampelForm(env, pohonSampelId, data = {}) {
 
   if(!sampel) return layout("Pohon Sampel Tidak Ditemukan", `<div class="card"><h2>Pohon sampel tidak ditemukan.</h2><a href="/pohon-sampel" class="btn btn-secondary">← Kembali</a></div>`, "pohon-sampel", "admin");
 
-  const cloudName = (env && env.CLOUDINARY_CLOUD_NAME) ? env.CLOUDINARY_CLOUD_NAME : "ttkppmx4";
-  const uploadPreset = (env && env.CLOUDINARY_UPLOAD_PRESET) ? env.CLOUDINARY_UPLOAD_PRESET : "avokoka_upload";
+  const cloudName = env?.CLOUDINARY_CLOUD_NAME || "ttkppmx4";
+  const uploadPreset = env?.CLOUDINARY_UPLOAD_PRESET || "avokoka_upload";
+
+  const scriptHtml = [
+    '<script>',
+    '(function() {',
+    '  var form = document.getElementById("fotoForm");',
+    '  var fileInput = document.getElementById("fotoFile");',
+    '  var urlInput = document.getElementById("url_foto");',
+    '  var publicIdInput = document.getElementById("cloudinary_public_id");',
+    '  var btn = document.getElementById("uploadButton");',
+    '  var status = document.getElementById("uploadStatus");',
+    '  var preview = document.getElementById("preview");',
+    '  var cloudName = "' + cloudName + '";',
+    '  var uploadPreset = "' + uploadPreset + '";',
+    '  function kompresGambar(file, maxDimension, quality) {',
+    '    return new Promise(function(resolve, reject) {',
+    '      var reader = new FileReader();',
+    '      reader.readAsDataURL(file);',
+    '      reader.onload = function(e) {',
+    '        var img = new Image();',
+    '        img.src = e.target.result;',
+    '        img.onload = function() {',
+    '          var width = img.width;',
+    '          var height = img.height;',
+    '          if (width > height) {',
+    '            if (width > maxDimension) { height = Math.round((height * maxDimension) / width); width = maxDimension; }',
+    '          } else {',
+    '            if (height > maxDimension) { width = Math.round((width * maxDimension) / height); height = maxDimension; }',
+    '          }',
+    '          var canvas = document.createElement("canvas");',
+    '          canvas.width = width; canvas.height = height;',
+    '          var ctx = canvas.getContext("2d");',
+    '          ctx.drawImage(img, 0, 0, width, height);',
+    '          canvas.toBlob(function(blob) {',
+    '            if (blob) { resolve(blob); } else { reject(new Error("Gagal mengompres gambar")); }',
+    '          }, "image/jpeg", quality);',
+    '        };',
+    '        img.onerror = function(err) { reject(err); };',
+    '      };',
+    '      reader.onerror = function(err) { reject(err); };',
+    '    });',
+    '  }',
+    '  if(fileInput) {',
+    '    fileInput.addEventListener("change", function() {',
+    '      var file = fileInput.files[0];',
+    '      if(file) { preview.innerHTML = \'<img src="\' + URL.createObjectURL(file) + \'" style="max-width:200px; max-height:200px; border-radius:8px; border:1px solid #ccc;">\'; }',
+    '    });',
+    '  }',
+    '  if(form) {',
+    '    form.addEventListener("submit", async function(e) {',
+    '      if (urlInput.value) return;',
+    '      e.preventDefault();',
+    '      var file = fileInput.files[0];',
+    '      if(!file) { alert("Pilih file foto terlebih dahulu."); return; }',
+    '      btn.disabled = true;',
+    '      btn.textContent = "⏳ Memproses foto...";',
+    '      status.style.color = "#176b3a";',
+    '      status.textContent = "⏳ Mengompres file foto agar lebih ringan...";',
+    '      try {',
+    '        var compressedBlob = await kompresGambar(file, 1200, 0.75);',
+    '        status.textContent = "⏳ Upload foto ringan ke Cloudinary...";',
+    '        var formData = new FormData();',
+    '        formData.append("file", compressedBlob, "foto_sampel.jpg");',
+    '        formData.append("upload_preset", uploadPreset);',
+    '        var response = await fetch("https://api.cloudinary.com/v1_1/" + cloudName + "/image/upload", { method: "POST", body: formData });',
+    '        var result = await response.json();',
+    '        if(!response.ok) { throw new Error(result.error ? result.error.message : "Gagal unggah foto"); }',
+    '        urlInput.value = result.secure_url;',
+    '        publicIdInput.value = result.public_id || "";',
+    '        status.textContent = "✅ Foto berhasil diunggah! Menyimpan data...";',
+    '        form.submit();',
+    '      } catch(err) {',
+    '        btn.disabled = false;',
+    '        btn.textContent = "☁️ Upload & Simpan";',
+    '        status.style.color = "#b42318";',
+    '        status.textContent = "❌ Gagal unggah foto: " + err.message;',
+    '      }',
+    '    });',
+    '  }',
+    '})();',
+    '</script>'
+  ].join("\n");
 
   const content = `
     <div class="page-title"><div><h1>📷 Tambah Foto Pohon Sampel</h1></div></div>
@@ -642,109 +722,7 @@ export async function fotoPohonSampelForm(env, pohonSampelId, data = {}) {
         </div>
       </form>
     </div>
-
-    <script>
-      (function() {
-        var form = document.getElementById("fotoForm");
-        var fileInput = document.getElementById("fotoFile");
-        var urlInput = document.getElementById("url_foto");
-        var publicIdInput = document.getElementById("cloudinary_public_id");
-        var btn = document.getElementById("uploadButton");
-        var status = document.getElementById("uploadStatus");
-        var preview = document.getElementById("preview");
-
-        function kompresGambar(file, maxDimension, quality) {
-          return new Promise(function(resolve, reject) {
-            var reader = new FileReader();
-            reader.readAsDataURL(file);
-            reader.onload = function(e) {
-              var img = new Image();
-              img.src = e.target.result;
-              img.onload = function() {
-                var width = img.width;
-                var height = img.height;
-                if (width > height) {
-                  if (width > maxDimension) {
-                    height = Math.round((height * maxDimension) / width);
-                    width = maxDimension;
-                  }
-                } else {
-                  if (height > maxDimension) {
-                    width = Math.round((width * maxDimension) / height);
-                    height = maxDimension;
-                  }
-                }
-                var canvas = document.createElement("canvas");
-                canvas.width = width;
-                canvas.height = height;
-                var ctx = canvas.getContext("2d");
-                ctx.drawImage(img, 0, 0, width, height);
-                canvas.toBlob(function(blob) {
-                  if (blob) { resolve(blob); }
-                  else { reject(new Error("Gagal mengompres gambar")); }
-                }, "image/jpeg", quality);
-              };
-              img.onerror = function(err) { reject(err); };
-            };
-            reader.onerror = function(err) { reject(err); };
-          });
-        }
-
-        fileInput.addEventListener("change", function() {
-          var file = fileInput.files[0];
-          if(file) {
-            preview.innerHTML = '<img src="' + URL.createObjectURL(file) + '" style="max-width:200px; max-height:200px; border-radius:8px; border:1px solid #ccc;">';
-          }
-        });
-
-        form.addEventListener("submit", async function(e) {
-          if (urlInput.value) return;
-
-          e.preventDefault();
-          var file = fileInput.files[0];
-          if(!file) {
-            alert("Pilih file foto terlebih dahulu.");
-            return;
-          }
-
-          btn.disabled = true;
-          btn.textContent = "⏳ Memproses foto...";
-          status.style.color = "#176b3a";
-          status.textContent = "⏳ Mengompres file foto agar lebih ringan...";
-
-          try {
-            var compressedBlob = await kompresGambar(file, 1200, 0.75);
-            status.textContent = "⏳ Upload foto ringan ke Cloudinary...";
-
-            var formData = new FormData();
-            formData.append("file", compressedBlob, "foto_sampel.jpg");
-            formData.append("upload_preset", "${uploadPreset}");
-
-            var response = await fetch("https://api.cloudinary.com/v1_1/${cloudName}/image/upload", {
-              method: "POST",
-              body: formData
-            });
-
-            var result = await response.json();
-
-            if(!response.ok) {
-              throw new Error(result.error ? result.error.message : "Gagal unggah foto");
-            }
-
-            urlInput.value = result.secure_url;
-            publicIdInput.value = result.public_id || "";
-
-            status.textContent = "✅ Foto berhasil diunggah! Menyimpan data...";
-            form.submit();
-          } catch(err) {
-            btn.disabled = false;
-            btn.textContent = "☁️ Upload & Simpan";
-            status.style.color = "#b42318";
-            status.textContent = "❌ Gagal unggah foto: " + err.message;
-          }
-        });
-      })();
-    </script>
+    ${scriptHtml}
   `;
 
   return layout("Tambah Foto", content, "pohon-sampel", "admin");
