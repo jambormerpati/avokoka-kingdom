@@ -260,3 +260,588 @@ export async function pohonSampelDetail(env, id){
         </div>
       ` : `<p class="empty">Belum ada foto pohon sampel.</p>`}
     </div>
+  `;
+
+  return layout(`Pohon Sampel ${data.kode_sampel}`, content, "pohon-sampel", "admin");
+}
+
+export async function pohonSampelForm(env, data = {}){
+  const [pohon, plot] = await Promise.all([
+    env.DB.prepare(`
+      SELECT p.id, p.kode_pohon, p.komoditas, p.varietas, p.blok_id, b.kode_blok
+      FROM pohon p LEFT JOIN blok b ON b.id = p.blok_id
+      WHERE p.status = 'aktif' AND p.id NOT IN (SELECT pohon_id FROM pohon_sampel)
+      ORDER BY p.kode_pohon
+    `).all(),
+    env.DB.prepare(`
+      SELECT pl.id, pl.kode_plot, pl.nama_plot, pl.komoditas, pl.varietas, b.kode_blok
+      FROM plot pl LEFT JOIN blok b ON b.id = pl.blok_id
+      WHERE pl.status = 'aktif' ORDER BY pl.kode_plot
+    `).all()
+  ]);
+
+  const pohonRows = pohon.results || [];
+  const plotRows = plot.results || [];
+
+  const pohonOptions = pohonRows.map(p => `
+    <option value="${p.id}" ${String(data.pohon_id || "") === String(p.id) ? "selected" : ""}>
+      ${esc(p.kode_pohon)} — ${esc(p.komoditas || "-")} — ${esc(p.varietas || "-")} — Blok ${esc(p.kode_blok || "-")}
+    </option>
+  `).join("");
+
+  const plotOptions = plotRows.map(p => `
+    <option value="${p.id}" ${String(data.plot_id || "") === String(p.id) ? "selected" : ""}>
+      ${esc(p.kode_plot)} — ${esc(p.komoditas || "-")} — ${esc(p.varietas || "-")} — Blok ${esc(p.kode_blok || "-")}
+    </option>
+  `).join("");
+
+  const content = `
+    <div class="page-title">
+      <div><h1>🌱 Tambah Pohon Sampel</h1><p>Menetapkan pohon sebagai sampel penelitian.</p></div>
+    </div>
+    <div class="card">
+      <form method="POST" action="/pohon-sampel/new">
+        <div class="form-grid">
+          ${selectField("Pohon", "pohon_id", `<option value="">-- pilih pohon --</option>${pohonOptions}`, data.pohon_id || "", false, true)}
+          ${selectField("Plot", "plot_id", `<option value="">-- pilih plot --</option>${plotOptions}`, data.plot_id || "", false, true)}
+          ${field("Kode Sampel", "kode_sampel", data.kode_sampel || "", "text", false, true)}
+          ${textareaField("Keterangan", "keterangan", data.keterangan || "", true)}
+        </div>
+        ${formButtons("/pohon-sampel")}
+      </form>
+    </div>
+  `;
+
+  return layout("Tambah Pohon Sampel", content, "pohon-sampel", "admin");
+}
+
+export async function pohonSampelCreate(request, env){
+  const form = await request.formData();
+  const pohon_id = Number(form.get("pohon_id"));
+  const plot_id = Number(form.get("plot_id"));
+  const kode_sampel = String(form.get("kode_sampel") || "").trim();
+  const keterangan = String(form.get("keterangan") || "").trim();
+
+  if (!pohon_id || !plot_id || !kode_sampel){
+    return new Response("Data wajib belum lengkap.", { status: 400 });
+  }
+
+  const pohon = await env.DB.prepare(`SELECT id, komoditas, varietas, blok_id, status FROM pohon WHERE id=? LIMIT 1`).bind(pohon_id).first();
+  if (!pohon) return new Response("Pohon tidak ditemukan.", { status: 404 });
+  if (pohon.status !== "aktif") return new Response("Pohon tidak aktif.", { status: 400 });
+
+  const existing = await env.DB.prepare(`SELECT id FROM pohon_sampel WHERE pohon_id=? LIMIT 1`).bind(pohon_id).first();
+  if (existing) return new Response("Pohon ini sudah menjadi pohon sampel.", { status: 400 });
+
+  const plot = await env.DB.prepare(`SELECT id, blok_id, komoditas, varietas, status FROM plot WHERE id=? LIMIT 1`).bind(plot_id).first();
+  if (!plot) return new Response("Plot tidak ditemukan.", { status: 404 });
+  if (plot.status !== "aktif") return new Response("Plot tidak aktif.", { status: 400 });
+
+  if (Number(pohon.blok_id) !== Number(plot.blok_id)){
+    return new Response("Pohon dan Plot berada pada Blok yang berbeda.", { status: 400 });
+  }
+
+  try {
+    await env.DB.prepare(`
+      INSERT INTO pohon_sampel (plot_id, pohon_id, kode_sampel, status, keterangan)
+      VALUES (?, ?, ?, 'aktif', ?)
+    `).bind(plot_id, pohon_id, kode_sampel, keterangan || null).run();
+
+    return Response.redirect(new URL("/pohon-sampel", request.url).toString(), 303);
+  } catch(error){
+    return new Response("Gagal menyimpan pohon sampel: " + error.message, { status: 500 });
+  }
+}
+
+export async function panenRisetForm(env, pohonSampelId, data = {}){
+  const sampel = await env.DB.prepare(`
+    SELECT ps.id, ps.kode_sampel, p.kode_pohon, p.komoditas, p.varietas, pl.kode_plot, b.kode_blok
+    FROM pohon_sampel ps JOIN pohon p ON p.id = ps.pohon_id JOIN plot pl ON pl.id = ps.plot_id
+    LEFT JOIN blok b ON b.id = pl.blok_id WHERE ps.id = ? AND ps.status = 'aktif' LIMIT 1
+  `).bind(pohonSampelId).first();
+
+  if(!sampel) return new Response("Pohon sampel tidak ditemukan.", { status: 404 });
+
+  const content = `
+    <div class="page-title">
+      <div><h1>Tambah Panen Riset</h1><p>Mencatat hasil panen pohon sampel.</p></div>
+    </div>
+    <div class="card">
+      <div style="margin-bottom:20px; padding:15px; border-radius:8px; background:rgba(0,0,0,.04);">
+        <strong>${esc(sampel.kode_sampel)}</strong> — Pohon <strong>${esc(sampel.kode_pohon)}</strong> — Plot <strong>${esc(sampel.kode_plot)}</strong>
+      </div>
+      <form method="POST" action="/pohon-sampel/${encodeURIComponent(pohonSampelId)}/panen-riset/new">
+        <div class="form-grid">
+          ${field("Tanggal Panen", "tanggal_panen", data.tanggal_panen || "", "date", false, true)}
+          ${field("Jumlah Buah", "jumlah_buah", data.jumlah_buah || "", "number")}
+          ${field("Berat Total (kg)", "berat_total_kg", data.berat_total_kg || "", "number")}
+          ${field("Tingkat Kematangan", "tingkat_kematangan", data.tingkat_kematangan || "")}
+          ${field("Kondisi Buah", "kondisi_buah", data.kondisi_buah || "")}
+          ${textareaField("Catatan", "catatan", data.catatan || "", true)}
+        </div>
+        ${formButtons(`/pohon-sampel/${encodeURIComponent(pohonSampelId)}`)}
+      </form>
+    </div>
+  `;
+
+  return layout("Tambah Panen Riset", content, "pohon-sampel", "admin");
+}
+
+export async function panenRisetCreate(request, env, pohonSampelId){
+  const form = await request.formData();
+  const tanggal_panen = form.get("tanggal_panen")?.trim();
+  const jumlah_buah = form.get("jumlah_buah")?.trim();
+  const berat_total_kg = form.get("berat_total_kg")?.trim();
+  const tingkat_kematangan = form.get("tingkat_kematangan")?.trim();
+  const kondisi_buah = form.get("kondisi_buah")?.trim();
+  const catatan = form.get("catatan")?.trim();
+
+  const sampel = await env.DB.prepare(`SELECT id FROM pohon_sampel WHERE id = ? AND status = 'aktif' LIMIT 1`).bind(pohonSampelId).first();
+  if(!sampel) return new Response("Pohon sampel tidak ditemukan.", { status: 404 });
+  if(!tanggal_panen) return new Response("Tanggal panen wajib diisi.", { status: 400 });
+
+  await env.DB.prepare(`
+    INSERT INTO panen_riset (pohon_sampel_id, tanggal_panen, jumlah_buah, berat_total_kg, tingkat_kematangan, kondisi_buah, catatan)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(pohonSampelId, tanggal_panen, jumlah_buah ? Number(jumlah_buah) : null, berat_total_kg ? Number(berat_total_kg) : null, tingkat_kematangan || null, kondisi_buah || null, catatan || null).run();
+
+  return new Response(null, { status: 303, headers: { Location: `/pohon-sampel/${encodeURIComponent(pohonSampelId)}` } });
+}
+
+export async function panenRisetEditForm(env, pohonSampelId, panenId){
+  const data = await env.DB.prepare(`
+    SELECT pr.*, ps.kode_sampel, p.kode_pohon, p.komoditas, p.varietas, pl.kode_plot, b.kode_blok
+    FROM panen_riset pr JOIN pohon_sampel ps ON ps.id = pr.pohon_sampel_id
+    JOIN pohon p ON p.id = ps.pohon_id JOIN plot pl ON pl.id = ps.plot_id LEFT JOIN blok b ON b.id = pl.blok_id
+    WHERE pr.id = ? AND pr.pohon_sampel_id = ? AND ps.status = 'aktif' LIMIT 1
+  `).bind(panenId, pohonSampelId).first();
+
+  if(!data) return new Response("Data panen riset tidak ditemukan.", { status: 404 });
+
+  const content = `
+    <div class="page-title"><div><h1>✏️ Edit Panen Riset</h1></div></div>
+    <div class="card">
+      <form method="POST" action="/pohon-sampel/${encodeURIComponent(pohonSampelId)}/panen-riset/${encodeURIComponent(panenId)}/update">
+        <div class="form-grid">
+          ${field("Tanggal Panen", "tanggal_panen", data.tanggal_panen || "", "date", false, true)}
+          ${field("Jumlah Buah", "jumlah_buah", data.jumlah_buah ?? "", "number")}
+          ${field("Berat Total (kg)", "berat_total_kg", data.berat_total_kg ?? "", "number")}
+          ${field("Tingkat Kematangan", "tingkat_kematangan", data.tingkat_kematangan || "")}
+          ${field("Kondisi Buah", "kondisi_buah", data.kondisi_buah || "")}
+          ${textareaField("Catatan", "catatan", data.catatan || "", true)}
+        </div>
+        ${formButtons(`/pohon-sampel/${encodeURIComponent(pohonSampelId)}`)}
+      </form>
+    </div>
+  `;
+
+  return layout("Edit Panen Riset", content, "pohon-sampel", "admin");
+}
+
+export async function panenRisetUpdate(request, env, pohonSampelId, panenId){
+  const form = await request.formData();
+  const tanggal_panen = form.get("tanggal_panen")?.trim();
+  const jumlah_buah = form.get("jumlah_buah")?.trim();
+  const berat_total_kg = form.get("berat_total_kg")?.trim();
+  const tingkat_kematangan = form.get("tingkat_kematangan")?.trim();
+  const kondisi_buah = form.get("kondisi_buah")?.trim();
+  const catatan = form.get("catatan")?.trim();
+
+  await env.DB.prepare(`
+    UPDATE panen_riset
+    SET tanggal_panen = ?, jumlah_buah = ?, berat_total_kg = ?, tingkat_kematangan = ?, kondisi_buah = ?, catatan = ?
+    WHERE id = ? AND pohon_sampel_id = ?
+  `).bind(tanggal_panen, jumlah_buah ? Number(jumlah_buah) : null, berat_total_kg ? Number(berat_total_kg) : null, tingkat_kematangan || null, kondisi_buah || null, catatan || null, panenId, pohonSampelId).run();
+
+  return new Response(null, { status: 303, headers: { Location: `/pohon-sampel/${encodeURIComponent(pohonSampelId)}` } });
+}
+
+export async function panenRisetDelete(env, pohonSampelId, panenId){
+  await env.DB.prepare(`DELETE FROM panen_riset WHERE id = ? AND pohon_sampel_id = ?`).bind(panenId, pohonSampelId).run();
+  return new Response(null, { status: 303, headers: { Location: `/pohon-sampel/${encodeURIComponent(pohonSampelId)}` } });
+}
+
+export async function pengamatanForm(env, pohonSampelId, data = {}){
+  const sampel = await env.DB.prepare(`
+    SELECT ps.id, ps.kode_sampel, p.kode_pohon, p.komoditas, p.varietas, pl.kode_plot, b.kode_blok
+    FROM pohon_sampel ps JOIN pohon p ON p.id = ps.pohon_id JOIN plot pl ON pl.id = ps.plot_id LEFT JOIN blok b ON b.id = pl.blok_id
+    WHERE ps.id = ? LIMIT 1
+  `).bind(pohonSampelId).first();
+
+  if(!sampel) return layout("Pohon Sampel Tidak Ditemukan", `<div class="card"><h2>Pohon sampel tidak ditemukan.</h2><a href="/pohon-sampel" class="btn btn-secondary">← Kembali</a></div>`, "pohon-sampel", "admin");
+
+  const content = `
+    <div class="page-title">
+      <div><h1>📋 Tambah Pengamatan</h1><p>${esc(sampel.kode_sampel)} — ${esc(sampel.kode_pohon)}</p></div>
+    </div>
+    <div class="card">
+      <form method="POST" action="/pohon-sampel/${encodeURIComponent(pohonSampelId)}/pengamatan/new">
+        <div class="form-grid">
+          ${field("Tanggal Pengamatan", "tanggal_pengamatan", data.tanggal_pengamatan || "", "date", false, true)}
+          ${field("Tinggi (m)", "tinggi_m", data.tinggi_m ?? "", "number")}
+          ${field("Diameter Batang (cm)", "diameter_batang_cm", data.diameter_batang_cm ?? "", "number")}
+          ${field("Diameter Kanopi (m)", "diameter_kanopi_m", data.diameter_kanopi_m ?? "", "number")}
+          ${field("Kondisi Bunga", "kondisi_bunga", data.kondisi_bunga || "")}
+          ${field("Kondisi Buah", "kondisi_buah", data.kondisi_buah || "")}
+          ${field("Jumlah Buah", "jumlah_buah", data.jumlah_buah ?? "", "number")}
+          ${field("Kondisi Tanaman", "kondisi_tanaman", data.kondisi_tanaman || "")}
+          ${field("Kondisi Cuaca", "kondisi_cuaca", data.kondisi_cuaca || "")}
+          ${textareaField("Catatan", "catatan", data.catatan || "", true)}
+        </div>
+        ${formButtons(`/pohon-sampel/${encodeURIComponent(pohonSampelId)}`)}
+      </form>
+    </div>
+  `;
+
+  return layout("Tambah Pengamatan", content, "pohon-sampel", "admin");
+}
+
+export async function pengamatanCreate(request, env, pohonSampelId){
+  const form = await request.formData();
+  const tanggal_pengamatan = form.get("tanggal_pengamatan")?.trim();
+  const tinggi_m = form.get("tinggi_m")?.trim();
+  const diameter_batang_cm = form.get("diameter_batang_cm")?.trim();
+  const diameter_kanopi_m = form.get("diameter_kanopi_m")?.trim();
+  const kondisi_bunga = form.get("kondisi_bunga")?.trim();
+  const kondisi_buah = form.get("kondisi_buah")?.trim();
+  const jumlah_buah = form.get("jumlah_buah")?.trim();
+  const kondisi_tanaman = form.get("kondisi_tanaman")?.trim();
+  const kondisi_cuaca = form.get("kondisi_cuaca")?.trim();
+  const catatan = form.get("catatan")?.trim();
+
+  if(!tanggal_pengamatan) return new Response("Tanggal pengamatan wajib diisi.", { status: 400 });
+
+  await env.DB.prepare(`
+    INSERT INTO pengamatan (
+      pohon_sampel_id, tanggal_pengamatan, tinggi_m, diameter_batang_cm, diameter_kanopi_m,
+      kondisi_bunga, kondisi_buah, jumlah_buah, kondisi_tanaman, kondisi_cuaca, catatan
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    pohonSampelId, tanggal_pengamatan, tinggi_m ? Number(tinggi_m) : null,
+    diameter_batang_cm ? Number(diameter_batang_cm) : null, diameter_kanopi_m ? Number(diameter_kanopi_m) : null,
+    kondisi_bunga || null, kondisi_buah || null, jumlah_buah ? Number(jumlah_buah) : null,
+    kondisi_tanaman || null, kondisi_cuaca || null, catatan || null
+  ).run();
+
+  return new Response(null, { status: 303, headers: { Location: `/pohon-sampel/${encodeURIComponent(pohonSampelId)}` } });
+}
+
+export async function pengamatanEditForm(env, pohonSampelId, pengamatanId){
+  const data = await env.DB.prepare(`
+    SELECT pg.*, ps.kode_sampel, p.kode_pohon, p.komoditas, p.varietas, pl.kode_plot, b.kode_blok
+    FROM pengamatan pg JOIN pohon_sampel ps ON ps.id = pg.pohon_sampel_id
+    JOIN pohon p ON p.id = ps.pohon_id JOIN plot pl ON pl.id = ps.plot_id LEFT JOIN blok b ON b.id = pl.blok_id
+    WHERE pg.id = ? AND pg.pohon_sampel_id = ? AND ps.status = 'aktif' LIMIT 1
+  `).bind(pengamatanId, pohonSampelId).first();
+
+  if(!data) return layout("Pengamatan Tidak Ditemukan", `<div class="card"><h2>Data pengamatan tidak ditemukan.</h2></div>`, "pohon-sampel", "admin");
+
+  const content = `
+    <div class="page-title"><div><h1>✏️ Edit Pengamatan</h1></div></div>
+    <div class="card">
+      <form method="POST" action="/pohon-sampel/${encodeURIComponent(pohonSampelId)}/pengamatan/${encodeURIComponent(pengamatanId)}/update">
+        <div class="form-grid">
+          ${field("Tanggal Pengamatan", "tanggal_pengamatan", data.tanggal_pengamatan || "", "date", false, true)}
+          ${field("Tinggi (m)", "tinggi_m", data.tinggi_m ?? "", "number")}
+          ${field("Diameter Batang (cm)", "diameter_batang_cm", data.diameter_batang_cm ?? "", "number")}
+          ${field("Diameter Kanopi (m)", "diameter_kanopi_m", data.diameter_kanopi_m ?? "", "number")}
+          ${field("Kondisi Bunga", "kondisi_bunga", data.kondisi_bunga || "")}
+          ${field("Kondisi Buah", "kondisi_buah", data.kondisi_buah || "")}
+          ${field("Jumlah Buah", "jumlah_buah", data.jumlah_buah ?? "", "number")}
+          ${field("Kondisi Tanaman", "kondisi_tanaman", data.kondisi_tanaman || "")}
+          ${field("Kondisi Cuaca", "kondisi_cuaca", data.kondisi_cuaca || "")}
+          ${textareaField("Catatan", "catatan", data.catatan || "", true)}
+        </div>
+        ${formButtons(`/pohon-sampel/${encodeURIComponent(pohonSampelId)}`)}
+      </form>
+    </div>
+  `;
+
+  return layout("Edit Pengamatan", content, "pohon-sampel", "admin");
+}
+
+export async function pengamatanUpdate(request, env, pohonSampelId, pengamatanId){
+  const form = await request.formData();
+  await env.DB.prepare(`
+    UPDATE pengamatan SET
+      tanggal_pengamatan = ?, tinggi_m = ?, diameter_batang_cm = ?, diameter_kanopi_m = ?,
+      kondisi_bunga = ?, kondisi_buah = ?, jumlah_buah = ?, kondisi_tanaman = ?, kondisi_cuaca = ?, catatan = ?
+    WHERE id = ? AND pohon_sampel_id = ?
+  `).bind(
+    form.get("tanggal_pengamatan"), form.get("tinggi_m") ? Number(form.get("tinggi_m")) : null,
+    form.get("diameter_batang_cm") ? Number(form.get("diameter_batang_cm")) : null,
+    form.get("diameter_kanopi_m") ? Number(form.get("diameter_kanopi_m")) : null,
+    form.get("kondisi_bunga") || null, form.get("kondisi_buah") || null,
+    form.get("jumlah_buah") ? Number(form.get("jumlah_buah")) : null,
+    form.get("kondisi_tanaman") || null, form.get("kondisi_cuaca") || null,
+    form.get("catatan") || null, pengamatanId, pohonSampelId
+  ).run();
+
+  return Response.redirect(new URL(`/pohon-sampel/${encodeURIComponent(pohonSampelId)}`, request.url), 303);
+}
+
+export async function fotoPohonSampelForm(env, pohonSampelId, data = {}) {
+  const targetId = pohonSampelId || data.pohon_sampel_id || data.id;
+
+  const sampel = await env.DB.prepare(`
+    SELECT ps.id, ps.kode_sampel, p.kode_pohon, p.komoditas, p.varietas, pl.kode_plot, b.kode_blok
+    FROM pohon_sampel ps 
+    JOIN pohon p ON p.id = ps.pohon_id 
+    JOIN plot pl ON pl.id = ps.plot_id 
+    LEFT JOIN blok b ON b.id = pl.blok_id
+    WHERE ps.id = ? LIMIT 1
+  `).bind(targetId).first();
+
+  if(!sampel) return layout("Pohon Sampel Tidak Ditemukan", `<div class="card"><h2>Pohon sampel tidak ditemukan.</h2><a href="/pohon-sampel" class="btn btn-secondary">← Kembali</a></div>`, "pohon-sampel", "admin");
+
+  const cloudName = (env && env.CLOUDINARY_CLOUD_NAME) ? env.CLOUDINARY_CLOUD_NAME : "ttkppmx4";
+  const uploadPreset = (env && env.CLOUDINARY_UPLOAD_PRESET) ? env.CLOUDINARY_UPLOAD_PRESET : "avokoka_upload";
+
+  const content = `
+    <div class="page-title"><div><h1>📷 Tambah Foto Pohon Sampel</h1></div></div>
+    <div class="card">
+      <div style="margin-bottom:20px; padding:15px; border-radius:8px; background:rgba(0,0,0,.04);">
+        <strong>${esc(sampel.kode_sampel)}</strong> — Pohon <strong>${esc(sampel.kode_pohon)}</strong>
+      </div>
+
+      <form id="fotoForm" action="/pohon-sampel/${encodeURIComponent(sampel.id)}/foto/new" method="POST">
+        <input type="hidden" name="url_foto" id="url_foto" value="">
+        <input type="hidden" name="cloudinary_public_id" id="cloudinary_public_id" value="">
+
+        <div class="form-grid">
+          ${field("Tanggal Foto", "tanggal_foto", data.tanggal_foto || new Date().toISOString().slice(0,10), "date", false, true)}
+          
+          <div class="form-group">
+            <label>Jenis Foto *</label>
+            <select class="form-control" name="jenis_foto" required>
+              <option value="">-- Pilih Jenis Foto --</option>
+              <option value="Tanaman">Tanaman</option>
+              <option value="Daun">Daun</option>
+              <option value="Bunga">Bunga</option>
+              <option value="Buah">Buah</option>
+              <option value="Batang">Batang</option>
+              <option value="Penyakit">Penyakit</option>
+              <option value="Lainnya">Lainnya</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Pilih File Foto *</label>
+            <input class="form-control" type="file" id="fotoFile" accept="image/*" required>
+          </div>
+
+          ${textareaField("Keterangan", "keterangan", data.keterangan || "", true)}
+        </div>
+
+        <div id="preview" style="margin-top:15px; margin-bottom:15px;"></div>
+        <div id="uploadStatus" style="margin-bottom:15px; font-weight:bold;"></div>
+
+        <div class="actions">
+          <a href="/pohon-sampel/${encodeURIComponent(sampel.id)}" class="btn btn-secondary">← Batal</a>
+          <button type="submit" class="btn btn-primary" id="uploadButton">☁️ Upload & Simpan</button>
+        </div>
+      </form>
+    </div>
+
+    <script>
+      (function() {
+        var form = document.getElementById("fotoForm");
+        var fileInput = document.getElementById("fotoFile");
+        var urlInput = document.getElementById("url_foto");
+        var publicIdInput = document.getElementById("cloudinary_public_id");
+        var btn = document.getElementById("uploadButton");
+        var status = document.getElementById("uploadStatus");
+        var preview = document.getElementById("preview");
+
+        function kompresGambar(file, maxDimension, quality) {
+          return new Promise(function(resolve, reject) {
+            var reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = function(e) {
+              var img = new Image();
+              img.src = e.target.result;
+              img.onload = function() {
+                var width = img.width;
+                var height = img.height;
+                if (width > height) {
+                  if (width > maxDimension) {
+                    height = Math.round((height * maxDimension) / width);
+                    width = maxDimension;
+                  }
+                } else {
+                  if (height > maxDimension) {
+                    width = Math.round((width * maxDimension) / height);
+                    height = maxDimension;
+                  }
+                }
+                var canvas = document.createElement("canvas");
+                canvas.width = width;
+                canvas.height = height;
+                var ctx = canvas.getContext("2d");
+                ctx.drawImage(img, 0, 0, width, height);
+                canvas.toBlob(function(blob) {
+                  if (blob) { resolve(blob); }
+                  else { reject(new Error("Gagal mengompres gambar")); }
+                }, "image/jpeg", quality);
+              };
+              img.onerror = function(err) { reject(err); };
+            };
+            reader.onerror = function(err) { reject(err); };
+          });
+        }
+
+        fileInput.addEventListener("change", function() {
+          var file = fileInput.files[0];
+          if(file) {
+            preview.innerHTML = '<img src="' + URL.createObjectURL(file) + '" style="max-width:200px; max-height:200px; border-radius:8px; border:1px solid #ccc;">';
+          }
+        });
+
+        form.addEventListener("submit", async function(e) {
+          if (urlInput.value) return;
+
+          e.preventDefault();
+          var file = fileInput.files[0];
+          if(!file) {
+            alert("Pilih file foto terlebih dahulu.");
+            return;
+          }
+
+          btn.disabled = true;
+          btn.textContent = "⏳ Memproses foto...";
+          status.style.color = "#176b3a";
+          status.textContent = "⏳ Mengompres file foto agar lebih ringan...";
+
+          try {
+            var compressedBlob = await kompresGambar(file, 1200, 0.75);
+            status.textContent = "⏳ Upload foto ringan ke Cloudinary...";
+
+            var formData = new FormData();
+            formData.append("file", compressedBlob, "foto_sampel.jpg");
+            formData.append("upload_preset", "${uploadPreset}");
+
+            var response = await fetch("https://api.cloudinary.com/v1_1/${cloudName}/image/upload", {
+              method: "POST",
+              body: formData
+            });
+
+            var result = await response.json();
+
+            if(!response.ok) {
+              throw new Error(result.error ? result.error.message : "Gagal unggah foto");
+            }
+
+            urlInput.value = result.secure_url;
+            publicIdInput.value = result.public_id || "";
+
+            status.textContent = "✅ Foto berhasil diunggah! Menyimpan data...";
+            form.submit();
+          } catch(err) {
+            btn.disabled = false;
+            btn.textContent = "☁️ Upload & Simpan";
+            status.style.color = "#b42318";
+            status.textContent = "❌ Gagal unggah foto: " + err.message;
+          }
+        });
+      })();
+    </script>
+  `;
+
+  return layout("Tambah Foto", content, "pohon-sampel", "admin");
+}
+
+export async function fotoPohonSampelCreate(request, env, pohonSampelId){
+  const form = await request.formData();
+  const tanggalFoto = String(form.get("tanggal_foto") || "").trim();
+  const jenisFoto = String(form.get("jenis_foto") || "").trim();
+  const urlFoto = String(form.get("url_foto") || "").trim();
+  const cloudinaryPublicId = String(form.get("cloudinary_public_id") || "").trim();
+  const keterangan = String(form.get("keterangan") || "").trim();
+
+  if(!tanggalFoto || !jenisFoto || !urlFoto) return new Response("Data foto belum lengkap.", { status: 400 });
+
+  const fotoId = crypto.randomUUID();
+  await env.DB.prepare(`
+    INSERT INTO foto_pohon_sampel (id, pohon_sampel_id, tanggal_foto, jenis_foto, url_foto, cloudinary_public_id, keterangan)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(fotoId, pohonSampelId, tanggalFoto, jenisFoto, urlFoto, cloudinaryPublicId || null, keterangan || null).run();
+
+  return new Response(null, { status: 303, headers: { Location: `/pohon-sampel/${encodeURIComponent(pohonSampelId)}` } });
+}
+
+export async function fotoPohonSampelEditForm(env, pohonSampelId, fotoId){
+  const foto = await env.DB.prepare(`
+    SELECT f.*, ps.kode_sampel, p.kode_pohon, p.komoditas, p.varietas, pl.kode_plot, b.kode_blok
+    FROM foto_pohon_sampel f JOIN pohon_sampel ps ON ps.id = f.pohon_sampel_id
+    JOIN pohon p ON p.id = ps.pohon_id JOIN plot pl ON pl.id = ps.plot_id LEFT JOIN blok b ON b.id = pl.blok_id
+    WHERE f.id = ? AND f.pohon_sampel_id = ? LIMIT 1
+  `).bind(String(fotoId), String(pohonSampelId)).first();
+
+  if(!foto) return layout("Foto Tidak Ditemukan", `<div class="card"><h2>Foto tidak ditemukan.</h2></div>`, "pohon-sampel", "admin");
+
+  const content = `
+    <div class="page-title"><div><h1>✏️ Edit Foto</h1></div></div>
+    <div class="card">
+      <form method="POST" action="/pohon-sampel/${encodeURIComponent(pohonSampelId)}/foto/${encodeURIComponent(fotoId)}/update">
+        <div class="form-grid">
+          ${field("Tanggal Foto", "tanggal_foto", foto.tanggal_foto || "", "date", false, true)}
+          <div>
+            <label>Jenis Foto</label>
+            <select name="jenis_foto" required>
+              <option value="Tanaman" ${foto.jenis_foto === "Tanaman" ? "selected" : ""}>Tanaman</option>
+              <option value="Daun" ${foto.jenis_foto === "Daun" ? "selected" : ""}>Daun</option>
+              <option value="Bunga" ${foto.jenis_foto === "Bunga" ? "selected" : ""}>Bunga</option>
+              <option value="Buah" ${foto.jenis_foto === "Buah" ? "selected" : ""}>Buah</option>
+              <option value="Batang" ${foto.jenis_foto === "Batang" ? "selected" : ""}>Batang</option>
+              <option value="Penyakit" ${foto.jenis_foto === "Penyakit" ? "selected" : ""}>Penyakit</option>
+              <option value="Lainnya" ${foto.jenis_foto === "Lainnya" ? "selected" : ""}>Lainnya</option>
+            </select>
+          </div>
+          ${textareaField("Keterangan", "keterangan", foto.keterangan || "", false)}
+        </div>
+        ${formButtons(`/pohon-sampel/${encodeURIComponent(pohonSampelId)}`)}
+      </form>
+    </div>
+  `;
+
+  return layout("Edit Foto", content, "pohon-sampel", "admin");
+}
+
+export async function fotoPohonSampelUpdate(request, env, pohonSampelId, fotoId){
+  const form = await request.formData();
+  await env.DB.prepare(`
+    UPDATE foto_pohon_sampel SET tanggal_foto = ?, jenis_foto = ?, keterangan = ?
+    WHERE id = ? AND pohon_sampel_id = ?
+  `).bind(String(form.get("tanggal_foto")), String(form.get("jenis_foto")), form.get("keterangan") || null, String(fotoId), String(pohonSampelId)).run();
+
+  return new Response(null, { status: 303, headers: { Location: `/pohon-sampel/${encodeURIComponent(pohonSampelId)}` } });
+}
+
+export async function fotoPohonSampelDelete(request, env, pohonSampelId, fotoId) {
+  if (!pohonSampelId || !fotoId) {
+    return new Response("ID Pohon Sampel atau Foto tidak valid.", { status: 400 });
+  }
+
+  const foto = await env.DB.prepare(`
+    SELECT id, url_foto, cloudinary_public_id 
+    FROM foto_pohon_sampel 
+    WHERE id = ? AND pohon_sampel_id = ? 
+    LIMIT 1
+  `).bind(String(fotoId), String(pohonSampelId)).first();
+
+  if (!foto) {
+    return new Response("Foto tidak ditemukan.", { status: 404 });
+  }
+
+  const targetPublicId = foto.cloudinary_public_id || foto.url_foto;
+  if (targetPublicId) {
+    await cloudinaryDeleteImage(env, targetPublicId);
+  }
+
+  await env.DB.prepare(`
+    DELETE FROM foto_pohon_sampel 
+    WHERE id = ? AND pohon_sampel_id = ?
+  `).bind(String(fotoId), String(pohonSampelId)).run();
+
+  return Response.redirect(new URL(`/pohon-sampel/${encodeURIComponent(pohonSampelId)}`, request.url), 303);
+}
