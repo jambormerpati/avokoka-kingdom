@@ -258,4 +258,5 @@ export async function pohonSampelDetail(env, id){
             </tbody>
           </table>
         </div>
-      ` : `<p class="empty">Belum ada foto
+      ` : `<p class="empty">Belum ada foto pohon sampel.</p>`}
+    </div>
