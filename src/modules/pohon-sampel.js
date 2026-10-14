@@ -1,5 +1,61 @@
 import { esc, field, selectField, textareaField, formButtons, layout } from "../utils/helpers.js";
 
+// Helper internal untuk mengekstrak public_id dari URL atau ID murni
+function extractPublicId(urlOrId) {
+  if (!urlOrId) return null;
+  if (!urlOrId.startsWith("http://") && !urlOrId.startsWith("https://")) {
+    return urlOrId;
+  }
+  try {
+    const parts = urlOrId.split("/upload/");
+    if (parts.length < 2) return null;
+    let path = parts[1];
+    path = path.replace(/^v\d+\//, "");
+    const lastDot = path.lastIndexOf(".");
+    if (lastDot !== -1) {
+      path = path.substring(0, lastDot);
+    }
+    return path;
+  } catch (e) {
+    return null;
+  }
+}
+
+export async function cloudinaryDeleteImage(env, rawPublicIdOrUrl) {
+  const publicId = extractPublicId(rawPublicIdOrUrl);
+
+  if (!publicId || !env || !env.CLOUDINARY_API_KEY || !env.CLOUDINARY_API_SECRET) {
+    return { ok: false, message: "Credentials missing or invalid public_id" };
+  }
+
+  const cloudName = env.CLOUDINARY_CLOUD_NAME || "ttkppmx4";
+  const timestamp = Math.floor(Date.now() / 1000);
+  const signatureBase = `invalidate=true&public_id=${publicId}&timestamp=${timestamp}${env.CLOUDINARY_API_SECRET}`;
+
+  const hashBuffer = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(signatureBase));
+  const signature = Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  const formData = new FormData();
+  formData.append("public_id", publicId);
+  formData.append("timestamp", String(timestamp));
+  formData.append("api_key", env.CLOUDINARY_API_KEY);
+  formData.append("signature", signature);
+  formData.append("invalidate", "true");
+
+  try {
+    const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/destroy`, {
+      method: "POST",
+      body: formData
+    });
+    const result = await response.json();
+    return { ok: response.ok, result };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
 export async function pohonSampelList(env){
   const data = await env.DB.prepare(`
     SELECT
@@ -233,13 +289,13 @@ export async function pohonSampelForm(env, data = {}){
 
   const pohonOptions = pohonRows.map(p => `
     <option value="${p.id}" ${String(data.pohon_id || "") === String(p.id) ? "selected" : ""}>
-      ${esc(p.kode_pohon)} — ${esc(p.komoditas || "-")} — ${esc(p.varietas || "-")} — Blok ${esc(p.kode_blok || "-")}
+      ${esc(p.kode_pohon)} —${esc(p.komoditas || "-")} — ${esc(p.varietas \vert{}\vert{} "-")} — Blok ${esc(p.kode_blok || "-")}
     </option>
   `).join("");
 
   const plotOptions = plotRows.map(p => `
     <option value="${p.id}" ${String(data.plot_id || "") === String(p.id) ? "selected" : ""}>
-      ${esc(p.kode_plot)} — ${esc(p.komoditas || "-")} — ${esc(p.varietas || "-")} — Blok ${esc(p.kode_blok || "-")}
+      ${esc(p.kode_plot)} —${esc(p.komoditas || "-")} — ${esc(p.varietas \vert{}\vert{} "-")} — Blok ${esc(p.kode_blok || "-")}
     </option>
   `).join("");
 
@@ -312,7 +368,7 @@ export async function panenRisetForm(env, pohonSampelId, data = {}){
 
   const content = `
     <div class="page-title">
-      <div><h1>Melon Tambah Panen Riset</h1><p>Mencatat hasil panen pohon sampel.</p></div>
+      <div><h1>Tambah Panen Riset</h1><p>Mencatat hasil panen pohon sampel.</p></div>
     </div>
     <div class="card">
       <div style="margin-bottom:20px; padding:15px; border-radius:8px; background:rgba(0,0,0,.04);">
@@ -420,7 +476,7 @@ export async function pengamatanForm(env, pohonSampelId, data = {}){
 
   const content = `
     <div class="page-title">
-      <div><h1>📋 Tambah Pengamatan</h1><p>${esc(sampel.kode_sampel)} — ${esc(sampel.kode_pohon)}</p></div>
+      <div><h1>📋 Tambah Pengamatan</h1><p>${esc(sampel.kode_sampel)} —${esc(sampel.kode_pohon)}</p></div>
     </div>
     <div class="card">
       <form method="POST" action="/pohon-sampel/${encodeURIComponent(pohonSampelId)}/pengamatan/new">
@@ -598,294 +654,3 @@ export async function fotoPohonSampelForm(env, pohonSampelId, data = {}) {
         const urlInput = document.getElementById("url_foto");
         const publicIdInput = document.getElementById("cloudinary_public_id");
         const btn = document.getElementById("uploadButton");
-        const status = document.getElementById("uploadStatus");
-        const preview = document.getElementById("preview");
-
-        // Fungsi mengompres file gambar menggunakan Canvas
-        function kompresGambar(file, maxDimension, quality) {
-          return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.readAsDataURL(file);
-            reader.onload = function(e) {
-              const img = new Image();
-              img.src = e.target.result;
-              img.onload = function() {
-                let width = img.width;
-                let height = img.height;
-
-                // Hitung aspek rasio agar resolusi maksimal disesuaikan
-                if (width > height) {
-                  if (width > maxDimension) {
-                    height = Math.round((height * maxDimension) / width);
-                    width = maxDimension;
-                  }
-                } else {
-                  if (height > maxDimension) {
-                    width = Math.round((width * maxDimension) / height);
-                    height = maxDimension;
-                  }
-                }
-
-                const canvas = document.createElement("canvas");
-                canvas.width = width;
-                canvas.height = height;
-
-                const ctx = canvas.getContext("2d");
-                ctx.drawImage(img, 0, 0, width, height);
-
-                // Export ke Blob format JPEG
-                canvas.toBlob((blob) => {
-                  if (blob) {
-                    resolve(blob);
-                  } else {
-                    reject(new Error("Gagal mengompres gambar"));
-                  }
-                }, "image/jpeg", quality);
-              };
-              img.onerror = (err) => reject(err);
-            };
-            reader.onerror = (err) => reject(err);
-          });
-        }
-
-        fileInput.addEventListener("change", function() {
-          const file = fileInput.files[0];
-          if(file) {
-            preview.innerHTML = '<img src="' + URL.createObjectURL(file) + '" style="max-width:200px; max-height:200px; border-radius:8px; border:1px solid #ccc;">';
-          }
-        });
-
-        form.addEventListener("submit", async function(e) {
-          if (urlInput.value) return;
-
-          e.preventDefault();
-          const file = fileInput.files[0];
-          if(!file) {
-            alert("Pilih file foto terlebih dahulu.");
-            return;
-          }
-
-          btn.disabled = true;
-          btn.textContent = "⏳ Memproses foto...";
-          status.style.color = "#176b3a";
-          status.textContent = "⏳ Mengompres file foto agar lebih ringan...";
-
-          try {
-            // Kompres foto: Lebar/tinggi maks 1200px, kualitas JPEG 75%
-            const compressedBlob = await kompresGambar(file, 1200, 0.75);
-
-            status.textContent = "⏳ Upload foto ringan ke Cloudinary...";
-
-            const formData = new FormData();
-            // Kirim file yang sudah dikompresi
-            formData.append("file", compressedBlob, "foto_sampel.jpg");
-            formData.append("upload_preset", "${uploadPreset}");
-
-            const response = await fetch("https://api.cloudinary.com/v1_1/${cloudName}/image/upload", {
-              method: "POST",
-              body: formData
-            });
-
-            const result = await response.json();
-
-            if(!response.ok) {
-              throw new Error(result.error ? result.error.message : "Gagal unggah foto");
-            }
-
-            urlInput.value = result.secure_url;
-            publicIdInput.value = result.public_id || "";
-
-            status.textContent = "✅ Foto berhasil diunggah! Menyimpan data...";
-            form.submit();
-          } catch(err) {
-            btn.disabled = false;
-            btn.textContent = "☁️ Upload & Simpan";
-            status.style.color = "#b42318";
-            status.textContent = "❌ Gagal unggah foto: " + err.message;
-          }
-        });
-      })();
-    </script>
-  `;
-
-  return layout("Tambah Foto", content, "pohon-sampel", "admin");
-}
-
-export async function fotoPohonSampelCreate(request, env, pohonSampelId) {
-  const form = await request.formData();
-  const tanggalFoto = String(form.get("tanggal_foto") || "").trim();
-  const jenisFoto = String(form.get("jenis_foto") || "").trim();
-  const urlFoto = String(form.get("url_foto") || "").trim();
-  const cloudinaryPublicId = String(form.get("cloudinary_public_id") || "").trim();
-  const keterangan = String(form.get("keterangan") || "").trim();
-
-  if(!tanggalFoto || !jenisFoto || !urlFoto) {
-    return new Response("Data foto belum lengkap. Pastikan URL foto berhasil terisi.", { status: 400 });
-  }
-
-  const fotoId = crypto.randomUUID();
-  await env.DB.prepare(`
-    INSERT INTO foto_pohon_sampel (id, pohon_sampel_id, tanggal_foto, jenis_foto, url_foto, cloudinary_public_id, keterangan)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).bind(fotoId, pohonSampelId, tanggalFoto, jenisFoto, urlFoto, cloudinaryPublicId || null, keterangan || null).run();
-
-  return Response.redirect(new URL(`/pohon-sampel/${encodeURIComponent(pohonSampelId)}`, request.url), 303);
-}
-
-export async function fotoPohonSampelEditForm(env, pohonSampelId, fotoId){
-  const foto = await env.DB.prepare(`
-    SELECT f.*, ps.kode_sampel, p.kode_pohon, p.komoditas, p.varietas, pl.kode_plot, b.kode_blok
-    FROM foto_pohon_sampel f JOIN pohon_sampel ps ON ps.id = f.pohon_sampel_id
-    JOIN pohon p ON p.id = ps.pohon_id JOIN plot pl ON pl.id = ps.plot_id LEFT JOIN blok b ON b.id = pl.blok_id
-    WHERE f.id = ? AND f.pohon_sampel_id = ? LIMIT 1
-  `).bind(String(fotoId), String(pohonSampelId)).first();
-
-  if(!foto) return layout("Foto Tidak Ditemukan", `<div class="card"><h2>Foto tidak ditemukan.</h2></div>`, "pohon-sampel", "admin");
-
-  const content = `
-    <div class="page-title"><div><h1>✏️ Edit Foto</h1></div></div>
-    <div class="card">
-      <form method="POST" action="/pohon-sampel/${encodeURIComponent(pohonSampelId)}/foto/${encodeURIComponent(fotoId)}/update">
-        <div class="form-grid">
-          ${field("Tanggal Foto", "tanggal_foto", foto.tanggal_foto || "", "date", false, true)}
-          <div>
-            <label>Jenis Foto</label>
-            <select name="jenis_foto" required>
-              <option value="Tanaman" ${foto.jenis_foto === "Tanaman" ? "selected" : ""}>Tanaman</option>
-              <option value="Daun" ${foto.jenis_foto === "Daun" ? "selected" : ""}>Daun</option>
-              <option value="Bunga" ${foto.jenis_foto === "Bunga" ? "selected" : ""}>Bunga</option>
-              <option value="Buah" ${foto.jenis_foto === "Buah" ? "selected" : ""}>Buah</option>
-              <option value="Batang" ${foto.jenis_foto === "Batang" ? "selected" : ""}>Batang</option>
-              <option value="Penyakit" ${foto.jenis_foto === "Penyakit" ? "selected" : ""}>Penyakit</option>
-              <option value="Lainnya" ${foto.jenis_foto === "Lainnya" ? "selected" : ""}>Lainnya</option>
-            </select>
-          </div>
-          ${textareaField("Keterangan", "keterangan", foto.keterangan || "", false)}
-        </div>
-        ${formButtons(`/pohon-sampel/${encodeURIComponent(pohonSampelId)}`)}
-      </form>
-    </div>
-  `;
-
-  return layout("Edit Foto", content, "pohon-sampel", "admin");
-}
-
-export async function fotoPohonSampelUpdate(request, env, pohonSampelId, fotoId){
-  const form = await request.formData();
-  await env.DB.prepare(`
-    UPDATE foto_pohon_sampel SET tanggal_foto = ?, jenis_foto = ?, keterangan = ?
-    WHERE id = ? AND pohon_sampel_id = ?
-  `).bind(String(form.get("tanggal_foto")), String(form.get("jenis_foto")), form.get("keterangan") || null, String(fotoId), String(pohonSampelId)).run();
-
-  return new Response(null, { status: 303, headers: { Location: `/pohon-sampel/${encodeURIComponent(pohonSampelId)}` } });
-}
-
-// Fungsi ekstraksi public_id otomatis jika yang tersimpan berupa URL lengkap
-function extractPublicId(urlOrId) {
-  if (!urlOrId) return null;
-  
-  // Jika bukan URL, berarti sudah public_id murni
-  if (!urlOrId.startsWith("http://") && !urlOrId.startsWith("https://")) {
-    return urlOrId;
-  }
-
-  try {
-    // Contoh URL Cloudinary: https://res.cloudinary.com/demo/image/upload/v12345678/folder/foto1.jpg
-    const parts = urlOrId.split("/upload/");
-    if (parts.length < 2) return null;
-
-    let path = parts[1];
-    // Hapus bagian versi (contoh: v12345678/)
-    path = path.replace(/^v\d+\//, "");
-
-    // Hapus ekstensi file (.jpg, .png, .jpeg, dll)
-    const lastDot = path.lastIndexOf(".");
-    if (lastDot !== -1) {
-      path = path.substring(0, lastDot);
-    }
-
-    return path; // Menghasilkan: "folder/foto1" atau "foto1"
-  } catch (e) {
-    return null;
-  }
-}
-
-export async function cloudinaryDeleteImage(env, rawPublicIdOrUrl) {
-  const publicId = extractPublicId(rawPublicIdOrUrl);
-
-  if (!publicId || !env.CLOUDINARY_API_KEY || !env.CLOUDINARY_API_SECRET) {
-    console.log("Credentials Cloudinary tidak lengkap atau public_id tidak valid.");
-    return { ok: false, message: "Missing credentials or public_id" };
-  }
-
-  const cloudName = env.CLOUDINARY_CLOUD_NAME || "ttkppmx4";
-  const timestamp = Math.floor(Date.now() / 1000);
-
-  // Parameter penyusun signature SHA-1
-  const signatureBase = `invalidate=true&public_id=${publicId}&timestamp=${timestamp}${env.CLOUDINARY_API_SECRET}`;
-
-  // Pembuatan signature digital SHA-1
-  const hashBuffer = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(signatureBase));
-  const signature = Array.from(new Uint8Array(hashBuffer))
-    .map(b => b.toString(16).padStart(2, "0"))
-    .join("");
-
-  const formData = new FormData();
-  formData.append("public_id", publicId);
-  formData.append("timestamp", String(timestamp));
-  formData.append("api_key", env.CLOUDINARY_API_KEY);
-  formData.append("signature", signature);
-  formData.append("invalidate", "true");
-
-  try {
-    const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/destroy`, {
-      method: "POST",
-      body: formData
-    });
-    const result = await response.json();
-    return { ok: response.ok, result };
-  } catch (err) {
-    console.error("Gagal menghapus gambar di Cloudinary:", err);
-    return { ok: false, error: err.message };
-  }
-}
-
-export async function fotoPohonSampelDelete(request, env, pohonSampelId, fotoId) {
-  // Query dengan konversi string yang presisi
-  const foto = await env.DB.prepare(`
-    SELECT id, url_foto, cloudinary_public_id 
-    FROM foto_pohon_sampel 
-    WHERE id = ? AND pohon_sampel_id = ? 
-    LIMIT 1
-  `).bind(String(fotoId), String(pohonSampelId)).first();
-
-  if (!foto) {
-    return new Response("Foto tidak ditemukan.", { status: 404 });
-  }
-
-  // Prioritaskan kolom cloudinary_public_id, jika kosong fallback mengekstrak dari url_foto
-  const targetPublicId = foto.cloudinary_public_id || foto.url_foto;
-
-  if (targetPublicId) {
-    await cloudinaryDeleteImage(env, targetPublicId);
-  }
-
-  // Hapus baris di D1 Database
-  await env.DB.prepare(`DELETE FROM foto_pohon_sampel WHERE id = ? AND pohon_sampel_id = ?`)
-    .bind(String(fotoId), String(pohonSampelId))
-    .run();
-
-  return Response.redirect(new URL(`/pohon-sampel/${encodeURIComponent(pohonSampelId)}`, request.url), 303);
-}
-
-export async function fotoPohonSampelDelete(request, env, pohonSampelId, fotoId){
-  const foto = await env.DB.prepare(`SELECT id, cloudinary_public_id FROM foto_pohon_sampel WHERE id = ? AND pohon_sampel_id = ? LIMIT 1`).bind(String(fotoId), String(pohonSampelId)).first();
-  if(!foto) return new Response("Foto tidak ditemukan.", { status: 404 });
-
-  if(foto.cloudinary_public_id){
-    await cloudinaryDeleteImage(env, String(foto.cloudinary_public_id));
-  }
-
-  await env.DB.prepare(`DELETE FROM foto_pohon_sampel WHERE id = ? AND pohon_sampel_id = ?`).bind(String(fotoId), String(pohonSampelId)).run();
-  return new Response(null, { status: 303, headers: { Location: `/pohon-sampel/${encodeURIComponent(pohonSampelId)}` } });
-}
