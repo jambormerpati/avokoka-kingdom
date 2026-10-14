@@ -656,7 +656,7 @@ export async function fotoPohonSampelForm(env, pohonSampelId, data = {}) {
     '        var compressedBlob = await kompresGambar(file, 1200, 0.75);',
     '        status.textContent = "⏳ Upload foto ringan ke Cloudinary...";',
     '        var formData = new FormData();',
-    '        formData.append("file", compressedBlob, file.name || "foto_sampel.jpg");
+    '        formData.append("file", compressedBlob, (file && file.name) ? file.name : \'foto_sampel.jpg\');',
     '        formData.append("upload_preset", uploadPreset);',
     '        var response = await fetch("https://api.cloudinary.com/v1_1/" + cloudName + "/image/upload", { method: "POST", body: formData });',
     '        var result = await response.json();',
